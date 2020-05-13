@@ -1,2 +1,2 @@
-# BERT_codenames
-(Trying to) Use BERT to play codenames!
+# deep_codenames
+(Trying to) Use NLP and deep learning to play codenames!
