@@ -4,23 +4,28 @@ from collections import OrderedDict
 from math import floor, sqrt
 from termcolor import colored, cprint
 from english_words import english_words_lower_alpha_set
-#from Team import Team
 
 RECORDS_FILE = 'records.txt'
 WORDS_FILE = 'wordlist.txt'
 DISTANCES_FILE = 'similarities.txt'
-
+RED_FILE = 'red.txt'
+BLUE_FILE = 'blue.txt'
+TITLE_FILE = 'title.txt'
+BOMB_FILE = 'bomb.txt'
 class Team:
    name = 'DEFAULT'
+   players = []
    other = None
    num_remaining = -1
    bomb = False
    past_hints = []
    past_hint_nums = []
    yolo = 5
-   def __init__(self, name, n_blue, yolo = 5):
+
+   def __init__(self, name, n_blue, yolo = 5, players = []):
        self.name = name
        self.yolo = yolo
+       self.players = players
        if name == 'Blue':
            self.num_remaining = n_blue
            self.other = 'Red'
@@ -31,7 +36,7 @@ class Team:
    def give_hint(self, board, turbo = False, comp_spy = False):
            hint, hint_num = "", -1
            print(f"It is {self.name}'s turn to play. They have {self.num_remaining} spaces remaining to get.")     
-           print_board(board) 
+           print_board(board, turn = self.name) 
            if turbo:
                print('Turbo mode skips hints.')
                return "TURBO",100
@@ -66,7 +71,7 @@ class Team:
        print()
        return 0
    
-   def guess(self, board, hint_num):        
+   def guess(self, board, hint,hint_num):        
         # Handle guesses
         guesses = 0
         while guesses < hint_num and self.num_remaining > 0:
@@ -93,8 +98,9 @@ class Team:
                 guesses += 1
                 self.num_remaining -= 1
                 if guesses < hint_num:
-                    print_board(board) 
+                    print_board(board, self.name) 
                     print(f'You got one! Keep going, you have {hint_num - (guesses)} guesses left this turn and {self.num_remaining} words left to get to win.')
+                    print(f'The hint was: {hint}')
                 else:
                     print('You got one, but your turn is over since you are out of guesses.')
                 
@@ -113,23 +119,35 @@ class Player:
     name = 'DEFAULT'
     team = 'DEFAULT'
     record = []
-    def __init__(self, name, record = [0,0]):
+    def __init__(self, name = 'DEFAULT', team= 'DEFAULT'):
         self.name = name
-        self.record = record
+        self.record = self.retrieve_record()
     def set_team(self,team):
         self.team = team
     def add_win(self):
         self.record[0] += 1
+        return self.record[0]
     def add_loss(self):
-        self.record[0] -= 1
+        self.record[1] += 1
+        return self.record[1]
     def retrieve_record(self, loc = RECORDS_FILE):
+        record = [0,0]
         with open(loc, 'r') as f:
             for line in f:
                 if self.name == line.split()[0]:
-                    self.record = list(line.split[1], line.split[2])
+                    record = list(line.split[1], line.split[2])
                 else:
                     continue
+        return record
+    def set_team(self, team):
+        self.team = team
         return 0
+    def __str__(self):
+        return self.name
+    def __repr__(self):
+        return self.name 
+    def __eq__(self,other):
+        return self.name == other
 
 class Space: 
    owner = 'DEFAULT'
@@ -150,6 +168,7 @@ class Space:
        self.guessed = True
        if self.owner == 'BOMB':
            print('You guessed the bomb!')
+           print(colored(open(BOMB_FILE, 'r').read(), 'magenta'))
        return self.owner
 
    def populate_distances(self):
@@ -223,21 +242,30 @@ def set_words(size,word_list):
    return words
 
 # TODO
-# Here is s
-def threshold(word,  yolo):
-    if yolo == 1:
-        return .8
-    if yolo == 10:
-        return .2
+# Some function of YOLO and number such that
+# Each successive barrier is less restricted
+# But how quickly that barrier moves is defined by yolo
+# TODO
+# Return positive, negative thresholds such that 
+# neutral/enemy/bomb words are (maybe) accounted for
+# at a threshold that is not threshold or 1000 - threshold? 
+
+def calc_threshold(hint_num, yolo):
+    #print(f'calculating threshold with yolo: {yolo}')
+    yolo_coeff_ = yolo / 10
+    initial_barrier_ = ( 10 - yolo ) * 100 
+    step_size_ = 100
+    #return initial_barrier_
+    return initial_barrier_ + hint_num *  yolo_coeff_ * step_size_ 
+
+
 # TODO Fun Part :)
-# YOLO constant decides how many words it attributes to each KEY #TODO Tune yolo
 def get_comp_hint(team, board, yolo = 4, top = True, NOISE = 69, matches = []):
     # this intends to set YOLO to a value between one and ten, with ten being most aggressive
     # For example, if yolo is 4 then two words with similarity 600 would be considered a good hint
     # It would also consider all matching enemy words ( and the bomb ) above 400 as things to avoid
     #TODO
     threshold = ( 10 - yolo ) * 100
-
     if top:
         print(f'Thinking about a hint for {team.name}..')   
     # Remove words that we have decided are too close to the words on the board
@@ -278,25 +306,24 @@ def get_comp_hint(team, board, yolo = 4, top = True, NOISE = 69, matches = []):
             if word in team.past_hints or matches:
                 continue
             try:
+                # Noise is often nice to have because it means that the same words on the board
+                # Do not always get the same hints, maybe this could be better fixed with good threshold
                 score = space.distances[word] + rd.randint(0, NOISE)
                 # How many words do we attribute to the score?
                 # Higher yolo means 'bigger' hints, hints for more words
+                #if score > calc_threshold(hint_scores[word][1], yolo):
                 if score > threshold:
-                    hint_words.append(word)
-                    hint_scores[word][0] += score
-                    hint_scores[word][1] += 1
-                # Replace the current 'best hint' if the product of the score and the
-                # number of words it pertains to is greater
-                # TODO is this neccessary anymore?
-                #if hint_scores[word][0] * hint_scores[word][1] > hint_scores[max_key][0] * hint_scores[max_key][1]:
-                #    max_key = word
+                    if score > calc_threshold(hint_scores[word][1], yolo):
+                        hint_words.append(word)
+                        hint_scores[word][0] += score
+                        hint_scores[word][1] += 1
+
             except KeyError:
                 #print(f'Failed to score hint from {space.word} to {word}')
                 hint_scores[word][0] -= 100000000
                 continue  
-     
+    
     enemy_spaces = []
-
     # TODO tune enemy avoidance
     for space in enemy_spaces:
         for word in hint_words:
@@ -318,7 +345,7 @@ def get_comp_hint(team, board, yolo = 4, top = True, NOISE = 69, matches = []):
     for word in hint_words:
         score = bomb.distances[word] + rd.randint(0, NOISE) 
         if score > 1000 - threshold:
-            hint_scores[word][0] -=  1.5 * hint_scores[word][1] * (score)
+            hint_scores[word][0] -= (score)**2
 
     # TODO
     hint_prods = {k : v[0]  for k,v in hint_scores.items()}
@@ -335,8 +362,8 @@ def get_comp_hint(team, board, yolo = 4, top = True, NOISE = 69, matches = []):
     # If you don't look its not there ;)
     # TODO
     if hint_num == 0:
-        print(f'No.. that hint doesnt work.. trying again')
-        hint, hint_num = get_comp_hint(team,board,yolo+1, top = False)
+        #print(f'No.. that hint doesnt work.. trying again')
+        hint, hint_num = get_comp_hint(team,board,yolo = yolo+1, top = False)
     
     # Lazily removing hint word that are part of words on the board
     # Load-in time is already pretty long, so decided to do this
@@ -407,7 +434,15 @@ def make_board(size,n_blue):
            board.append(Space('NEUTRAL', words[i],sim_dict[words[i]] ))
    return board
 
-def print_board(board, spymaster = False):
+def print_board(board,turn, spymaster = False):
+   if turn == 'Red':
+       for i in range(0):
+           print()
+       print(colored(open(RED_FILE).read(), 'red'))
+   elif turn == 'Blue':
+       for i in range(0):
+           print()
+       print(colored(open(BLUE_FILE).read(), 'blue'))
    cols = floor(sqrt(len(board)))
    for i in range(len(board)):
        if i % cols == 0:
@@ -421,13 +456,14 @@ def print_board(board, spymaster = False):
            else:
                rjust_offset = 9
        print(str(board[i]).rjust(30+rjust_offset), end = '')
+   print()
    print() 
    return 0
 
-def reveal_board(board):
+def reveal_board(board, turn = ""):
     for space in board:
         space.guessed = True
-    print_board(board) 
+    print_board(board, turn) 
     return 0
 
 # TODO
@@ -436,28 +472,40 @@ def play_again(blue, red, players, comp_spy = True):
         print('BLUE wins!!')
     elif red.num_remaining < 1 or blue.bomb:
         print('RED wins!!!')
-    again = input('Do you want to play again? y/n')
+    again = input('Do you want to play again? y/n ')
     if again == 'y' or again == 'yes':
-        same_teams = input('Do you want to use the same teams? y/n')
+        same_teams = input('Do you want to use the same teams? y/n ')
         if same_teams == 'y':
             driver(comp_spy = comp_spy, players = players)
         else:
-            driver(comp_spy = comp_spy)
+            driver(comp_spy = comp_spy, players = [])
     else:
         print('Thanks for playing!')
     return 0
 
 def gameover(blue,red):
-    retval = False
-    if blue.num_remaining < 1 or red.num_remaining < 1 or blue.bomb or red.bomb:
-        retval = True
+    retval = ''
+    if blue.num_remaining < 1 or red.bomb:
+        retval = 'Blue'
+    elif red.num_remaining <1 or blue.bomb:
+        retval = 'Red'
+#    if retval == 'Blue':
+#        for player in blue.players:
+#            player.add_win()
+#        for player in red.players:
+#            player.add_loss()
+#    elif retval == 'Red':
+#        for player in blue.players:
+#            player.add_loss()
+#        for player in red.players:
+#            player.add_win()
+
     return retval
 
-# TODO brian is a stupid monkey
 def randomize_teams(players):
     blue_players = []
     red_players = []
-    print(len(players))
+    #print(len(players))
     team_size = len(players) / 2
     if len(players) % 2 == 1:
         team_size = len(players)//2 + 1
@@ -484,8 +532,11 @@ def randomize_teams(players):
         print(str(p).rjust(10), end = ' ')
     print()
     return blue_players, red_players
+
 def make_teams(n_blue, players = []):
     # TODO track individual players so we can track their game score?
+    blue_players = []
+    red_players = []
     if not players:
         in_string = ''
         while in_string != 'done' and in_string != 'd':
@@ -493,32 +544,35 @@ def make_teams(n_blue, players = []):
             if in_string == 'done' or in_string == 'd':
                 break
             else:
-                players.append(in_string) 
+                players.append(Player(in_string)) 
         in_string = ''
         while in_string != 'y' and in_string != 'n':
             in_string = str(input('Do you want the teams randomized for you? y/n '))
         if in_string == 'y':
-            randomize_teams(players)
+            blue_players, red_players = randomize_teams(players)
         elif in_string == 'n':
             in_string = ''
             while in_string != 'done' and in_string != 'd':
-                in_string = input('Enter the players for blue. The rest will be assigned to red.')
-                if in_string == 'done' or in_string == 'd':
-                    blue_players.append(in_string)  
+                in_string = input('Enter the players for blue. The rest will be assigned to red. ')
+                if in_string == 'done' or in_string == 'd' or len(blue_players) > (len(players) / 2):
+                    blue_players.append(in_string)
+            for p in players:
+                if p.name not in blue_players:
+                    red_players.append(p)  
     blue_yolo = -50
     while not(blue_yolo >= 1 and blue_yolo <= 10): 
         try:
             blue_yolo = int( input('Please input Blue YOLO value: (1 - 10 Higher is more aggressive hints.) ') )
         except ValueError:
-            print('Enter a number 1-10 you monkeys.')
+            print('Enter an integer 1-10 you monkeys.')
     red_yolo = -50
     while not(red_yolo >= 1 and red_yolo <= 10): 
         try:
             red_yolo = int( input('Please input Red YOLO value:  (1 - 10 Higher is more aggressive hints.) ') )
         except ValueError:
-            print('Enter a number 1-10 you monkeys.')
+            print('Enter an integer 1-10 you monkeys.')
 
-    return Team('Blue', n_blue, yolo = blue_yolo), Team('Red', n_blue, yolo = red_yolo), players
+    return Team('Blue', n_blue, players = blue_players, yolo = blue_yolo), Team('Red', n_blue, players = red_players, yolo = red_yolo), players
 
 def print_title(loc= 'title.txt'):
     with open(loc, 'r') as f:
@@ -531,22 +585,28 @@ def driver(size=25, n_blue=9, turbo = False, comp_spy = False, players = []):
    else:
        blue, red, players = make_teams(n_blue)
    board = make_board(size, n_blue)
-   turn = 'BLUE'
+   turn = 'Blue'
    while not gameover(blue,red):
-       if turn == 'BLUE':
+       if turn == 'Blue':
            hint,hint_num = blue.give_hint(board, turbo, comp_spy)
-           outcome = blue.guess(board, hint_num)
+           outcome = blue.guess(board, hint,hint_num)
            if outcome == 'WRONG_COLOR':
                red.num_remaining -= 1
-           turn = 'RED'
+           elif outcome == 'BOMB':
+               turn = 'BOMB'
+               continue
+           turn = 'Red'
            continue   
-       elif turn == 'RED':
+       elif turn == 'Red':
            hint,hint_num = red.give_hint(board, turbo, comp_spy)
-           outcome = red.guess(board, hint_num)
+           outcome = red.guess(board, hint,hint_num)
            if outcome == 'WRONG_COLOR':
                blue.num_remaining -= 1
-           turn = 'BLUE'
+           elif outcome == 'BOMB':
+               turn = 'BOMB' 
+               continue
+           turn = 'Blue'
            continue    
-   reveal_board(board)
+   reveal_board(board, turn)
    play_again(blue, red, players)
    return 0
